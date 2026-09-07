@@ -1,0 +1,68 @@
+name: Release on Version Bump
+
+on:
+  push:
+    branches: [main]
+    paths: ["VERSION"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "VERSION file must contain a plain x.y.z version, got: '$v'"
+            exit 1
+          }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          echo "tag=v$v" >> $env:GITHUB_OUTPUT
+
+      - name: Check tag does not already exist
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $exists = git ls-remote --tags origin $tag
+          if ($exists) {
+            Write-Error "Tag $tag already exists. Bump VERSION to a new value."
+            exit 1
+          }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          path-type: minimal
+
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: |
+          $mingwBin = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "mingw64\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $mingwBin
+
+      - run: go mod tidy
+
+      - env:
+          CGO_ENABLED: 1
+          GOOS: windows
+          GOARCH: amd64
+          CC: gcc
+        run: go build -ldflags "-H=windowsgui -s -w" -o ThemeSwitcher.exe .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: ThemeSwitcher.exe
